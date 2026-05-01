@@ -24,6 +24,7 @@ It runs locally in your browser and is meant to behave like a lightweight compan
 3. Confirm the installation in your userscript manager.
 
 If you already have an older local copy installed, remove that old copy first so the browser only uses this repository version.
+Installing from the raw GitHub URL keeps Tampermonkey wired to the repository's `@updateURL`, so updates come from GitHub automatically.
 
 ## License
 

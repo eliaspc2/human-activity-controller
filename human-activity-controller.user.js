@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Human Activity Controller
-// @namespace    human.activity
-// @version      1.2.0
+// @namespace    https://github.com/eliaspc2/human-activity-controller
+// @version      1.2.1
 // @homepageURL  https://github.com/eliaspc2/human-activity-controller
 // @downloadURL  https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
 // @updateURL    https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
