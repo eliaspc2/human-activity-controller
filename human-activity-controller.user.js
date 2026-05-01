@@ -6,7 +6,7 @@
 // @downloadURL  https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
 // @updateURL    https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
 // @license      MIT
-// @description  Floating controller for simulated reading-like activity with scroll, cursor movement, clicks, and refresh.
+// @description  Floating controller with a draggable HA launcher for simulated reading-like activity with scroll, cursor movement, clicks, and refresh.
 // @match        https://ava.tecnisign.pt/*
 // @match        https://ava.multiformactiva.pt/*
 // @noframes
@@ -27,7 +27,7 @@
   const CURSOR_ID = "human-activity-userscript-cursor";
   const LAUNCHER_ID = "human-activity-userscript-launcher";
   const BOOT_PROBE_ID = "human-activity-boot-probe";
-  const VERSION = "1.2.0";
+  const VERSION = "1.2.1";
 
   if (isPdfContext()) {
     return;
@@ -78,18 +78,23 @@
   let maxDelaySeconds = 30;
   let enabledActions = createDefaultActionState();
   let actionVariancePercent = 20;
-  let panelCollapsed = true;
+  let panelCollapsed = false;
   let panelExpandedPosition = null;
   let panelCollapsedPosition = null;
   let isDragging = false;
   let dragOffsetX = 0;
   let dragOffsetY = 0;
+  let isLauncherDragging = false;
+  let launcherDragOffsetX = 0;
+  let launcherDragOffsetY = 0;
+  let launcherDragMoved = false;
   let cursorTimer = null;
   let loopTimer = null;
   let statsTimer = null;
   let wakeLock = null;
   let focusPulseTimer = null;
   let panelPosition = null;
+  let launcherPosition = null;
   let noteText = "Ready.";
 
   if (window.__humanActivityUserscript?.version === VERSION && window.__humanActivityUserscript?.focusPanel) {
@@ -123,6 +128,7 @@
   const launcher = document.createElement("button");
   launcher.id = LAUNCHER_ID;
   launcher.type = "button";
+  launcher.dataset.humanActivityRoot = "true";
   launcher.textContent = "HA";
   launcher.title = "Abrir Human Activity";
   launcher.setAttribute("aria-label", "Abrir Human Activity");
@@ -144,7 +150,6 @@
   const startButton = panel.querySelector("#hae-start");
   const pauseButton = panel.querySelector("#hae-pause");
   const stopButton = panel.querySelector("#hae-stop");
-  const minimizeButton = panel.querySelector("#hae-minimize");
   const closeButton = panel.querySelector("#hae-close");
   const panelBody = panel.querySelector(".hae-body");
   const progressBar = panel.querySelector("#hae-progress-bar");
@@ -173,7 +178,8 @@
   const timeValue = panel.querySelector("#hae-time");
   const dragbar = panel.querySelector(".hae-header");
 
-  launcher.addEventListener("click", () => void showPanel());
+  launcher.addEventListener("click", handleLauncherClick);
+  launcher.addEventListener("mousedown", handleLauncherDragStart);
   plus5Button.addEventListener("click", () => void addTime(5));
   plus30Button.addEventListener("click", () => void addTime(30));
   plus60Button.addEventListener("click", () => void addTime(60));
@@ -188,7 +194,6 @@
   startButton.addEventListener("click", () => void handleStartClick());
   pauseButton.addEventListener("click", () => void pauseSession());
   stopButton.addEventListener("click", () => void stopSession(STATUS.STOPPED));
-  minimizeButton.addEventListener("click", () => void togglePanelCollapse());
   closeButton.addEventListener("click", () => void hidePanel());
   dragbar.addEventListener("mousedown", handleDragStart);
   document.addEventListener("mousemove", handleDragMove);
@@ -199,12 +204,11 @@
 
   syncDelayRange({ persist: false });
   setPanelCollapsed(panelCollapsed, { persist: false });
-  focusPanel();
   updateUiState();
 
   void initialize();
 
-    window.__humanActivityUserscript = {
+  window.__humanActivityUserscript = {
     version: VERSION,
     destroy,
     focusPanel,
@@ -213,9 +217,14 @@
       panelPosition = null;
       panelExpandedPosition = null;
       panelCollapsedPosition = null;
+      launcherPosition = null;
       panel.style.right = "auto";
       panel.style.left = "16px";
       panel.style.top = "16px";
+      launcher.style.right = "auto";
+      launcher.style.left = "16px";
+      launcher.style.top = "";
+      launcher.style.bottom = "16px";
       setPanelCollapsed(false, { persist: false });
       return showPanel();
     },
@@ -225,18 +234,27 @@
     const savedSession = await loadSavedSession();
 
     const initialPanelPosition =
-      savedSession?.panelCollapsed === false
-        ? (savedSession.panelExpandedPosition ?? savedSession.panelPosition ?? null)
-        : (savedSession?.panelCollapsedPosition ?? savedSession?.panelPosition ?? null);
+      savedSession?.panelExpandedPosition ?? savedSession?.panelPosition ?? null;
+    const initialLauncherPosition = savedSession?.launcherPosition ?? null;
 
     if (initialPanelPosition) {
       applyPanelPosition(initialPanelPosition);
+    }
+
+    if (initialLauncherPosition) {
+      applyLauncherPosition(initialLauncherPosition);
     }
 
     if (savedSession) {
       hydrateSession(savedSession);
     } else {
       await persistSession();
+    }
+
+    if (panelOpen) {
+      focusPanel();
+    } else {
+      panel.style.display = "none";
     }
 
     updateUiState();
@@ -359,18 +377,10 @@
     const headerControls = node("div", { className: "hae-header-controls" });
     headerControls.appendChild(node("button", {
       className: "hae-icon-button",
-      id: "hae-minimize",
-      type: "button",
-      title: "Minimize overlay",
-      ariaLabel: "Minimize overlay",
-      text: "-",
-    }));
-    headerControls.appendChild(node("button", {
-      className: "hae-icon-button",
       id: "hae-close",
       type: "button",
-      title: "Close controller",
-      ariaLabel: "Close controller",
+      title: "Hide controller",
+      ariaLabel: "Hide controller",
       text: "x",
     }));
     header.appendChild(headerControls);
@@ -523,14 +533,19 @@
         box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
         font: 700 12px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         letter-spacing: 0;
-        cursor: pointer;
+        cursor: grab;
         user-select: none;
+        touch-action: none;
         backdrop-filter: blur(10px);
       }
 
       #${LAUNCHER_ID}:hover {
         background: #ffffff;
         color: #0f766e;
+      }
+
+      #${LAUNCHER_ID}:active {
+        cursor: grabbing;
       }
 
       #${CURSOR_ID} {
@@ -958,11 +973,6 @@
   }
 
   function persistSessionSync() {
-    if (!panelOpen) {
-      deleteStorageValue(SESSION_KEY);
-      return;
-    }
-
     setStorageValue(SESSION_KEY, buildSessionSnapshot());
   }
 
@@ -990,6 +1000,7 @@
       panelCollapsed,
       panelExpandedPosition,
       panelCollapsedPosition,
+      launcherPosition,
       enabledActions: { ...enabledActions },
       minutesValue: minutesInput.value,
       panelPosition,
@@ -1003,7 +1014,7 @@
     minDelaySeconds = clamp(Number(session.minDelaySeconds ?? minDelaySeconds), 1, 60);
     maxDelaySeconds = clamp(Number(session.maxDelaySeconds ?? maxDelaySeconds), 1, 180);
     actionVariancePercent = clamp(Number(session.actionVariancePercent ?? actionVariancePercent), 0, 100);
-    panelCollapsed = Boolean(session.panelCollapsed ?? true);
+    panelCollapsed = false;
     actionCount = Number(session.actionCount ?? 0);
     nextActionAt = Number(session.nextActionAt ?? 0);
     nextActionName = session.nextActionName ?? "-";
@@ -1012,6 +1023,7 @@
     panelExpandedPosition = session.panelExpandedPosition ?? legacyPanelPosition;
     panelCollapsedPosition = session.panelCollapsedPosition ?? legacyPanelPosition;
     panelPosition = panelCollapsed ? panelCollapsedPosition : panelExpandedPosition;
+    launcherPosition = session.launcherPosition ?? null;
 
     if (session.minutesValue) {
       minutesInput.value = String(session.minutesValue);
@@ -1699,6 +1711,51 @@
     }
   }
 
+  function applyLauncherPosition(position) {
+    const left = Number.parseFloat(position?.left);
+    const top = Number.parseFloat(position?.top);
+
+    if (!Number.isFinite(left) || !Number.isFinite(top)) {
+      return;
+    }
+
+    launcher.style.right = "auto";
+    launcher.style.bottom = "auto";
+    launcher.style.left = `${left}px`;
+    launcher.style.top = `${top}px`;
+    clampLauncherToViewport();
+  }
+
+  function clampLauncherToViewport() {
+    const rect = launcher.getBoundingClientRect();
+    const width = rect.width || 42;
+    const height = rect.height || 42;
+    const maxLeft = Math.max(8, window.innerWidth - width - 8);
+    const maxTop = Math.max(8, window.innerHeight - height - 8);
+    let left = rect.left;
+    let top = rect.top;
+
+    if (!Number.isFinite(left) || rect.right < 8 || rect.left > window.innerWidth - 8) {
+      left = 16;
+    }
+
+    if (!Number.isFinite(top) || rect.bottom < 8 || rect.top > window.innerHeight - 8) {
+      top = window.innerHeight - height - 16;
+    }
+
+    left = clamp(left, 8, maxLeft);
+    top = clamp(top, 8, maxTop);
+
+    launcher.style.right = "auto";
+    launcher.style.bottom = "auto";
+    launcher.style.left = `${Math.round(left)}px`;
+    launcher.style.top = `${Math.round(top)}px`;
+    launcherPosition = {
+      left: launcher.style.left,
+      top: launcher.style.top,
+    };
+  }
+
   function handleDragStart(event) {
     if (event.button !== 0) {
       return;
@@ -1711,28 +1768,73 @@
     dragOffsetY = event.clientY - rect.top;
   }
 
-  function handleDragMove(event) {
-    if (!isDragging) {
+  function handleLauncherDragStart(event) {
+    if (event.button !== 0) {
       return;
     }
 
-    panel.style.right = "auto";
-    panel.style.left = `${event.clientX - dragOffsetX}px`;
-    panel.style.top = `${event.clientY - dragOffsetY}px`;
+    event.preventDefault();
+    isLauncherDragging = true;
+    launcherDragMoved = false;
+    const rect = launcher.getBoundingClientRect();
+    launcherDragOffsetX = event.clientX - rect.left;
+    launcherDragOffsetY = event.clientY - rect.top;
+  }
+
+  function handleDragMove(event) {
+    if (isDragging) {
+      panel.style.right = "auto";
+      panel.style.left = `${event.clientX - dragOffsetX}px`;
+      panel.style.top = `${event.clientY - dragOffsetY}px`;
+      return;
+    }
+
+    if (isLauncherDragging) {
+      const left = clamp(
+        event.clientX - launcherDragOffsetX,
+        8,
+        Math.max(8, window.innerWidth - launcher.offsetWidth - 8)
+      );
+      const top = clamp(
+        event.clientY - launcherDragOffsetY,
+        8,
+        Math.max(8, window.innerHeight - launcher.offsetHeight - 8)
+      );
+
+      launcherDragMoved = true;
+      launcher.style.right = "auto";
+      launcher.style.bottom = "auto";
+      launcher.style.left = `${left}px`;
+      launcher.style.top = `${top}px`;
+    }
   }
 
   async function handleDragEnd() {
-    if (!isDragging) {
-      return;
+    let changed = false;
+
+    if (isDragging) {
+      isDragging = false;
+      clampPanelToViewport();
+      panelPosition = {
+        left: panel.style.left || null,
+        top: panel.style.top || null,
+      };
+      changed = true;
     }
 
-    isDragging = false;
-    clampPanelToViewport();
-    panelPosition = {
-      left: panel.style.left || null,
-      top: panel.style.top || null,
-    };
-    await persistSession();
+    if (isLauncherDragging) {
+      isLauncherDragging = false;
+      clampLauncherToViewport();
+      changed = true;
+
+      window.setTimeout(() => {
+        launcherDragMoved = false;
+      }, 0);
+    }
+
+    if (changed) {
+      await persistSession();
+    }
   }
 
   async function handleVisibilityChange() {
@@ -1743,6 +1845,14 @@
 
   function handlePageUnload() {
     persistSessionSync();
+  }
+
+  function handleLauncherClick() {
+    if (launcherDragMoved) {
+      return;
+    }
+
+    void showPanel();
   }
 
   function focusPanel() {
@@ -1779,13 +1889,8 @@
     if (panelBody) {
       panelBody.hidden = false;
     }
-    if (minimizeButton) {
-      minimizeButton.textContent = "-";
-      minimizeButton.title = "Minimize overlay";
-      minimizeButton.setAttribute("aria-label", "Minimize overlay");
-    }
     panel.style.display = "none";
-    await clearSavedSession();
+    await persistSession();
   }
 
   async function togglePanelCollapse() {
@@ -1814,12 +1919,6 @@
       clampPanelToViewport();
     }
 
-    if (minimizeButton) {
-      minimizeButton.textContent = panelCollapsed ? "+" : "-";
-      minimizeButton.title = panelCollapsed ? "Restore overlay" : "Minimize overlay";
-      minimizeButton.setAttribute("aria-label", panelCollapsed ? "Restore overlay" : "Minimize overlay");
-    }
-
     if (persist) {
       await persistSession();
     }
@@ -1832,6 +1931,8 @@
     document.removeEventListener("mouseup", handleDragEnd);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     dragbar.removeEventListener("mousedown", handleDragStart);
+    launcher.removeEventListener("click", handleLauncherClick);
+    launcher.removeEventListener("mousedown", handleLauncherDragStart);
     await clearSavedSession();
     root.remove();
     delete window.__humanActivityUserscript;
