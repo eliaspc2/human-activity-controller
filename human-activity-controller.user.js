@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         Human Activity Controller
 // @namespace    https://github.com/eliaspc2/human-activity-controller
-// @version      1.2.1
+// @version      1.3.0
 // @homepageURL  https://github.com/eliaspc2/human-activity-controller
 // @downloadURL  https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
 // @updateURL    https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
 // @license      MIT
-// @description  Floating controller with a draggable HA launcher for simulated reading-like activity with scroll, cursor movement, clicks, and refresh.
+// @description  Floating controller with a draggable HA launcher for simulated reading-like activity with editable weighted scroll, cursor movement, clicks, and refresh.
 // @match        https://ava.tecnisign.pt/*
 // @match        https://ava.multiformactiva.pt/*
 // @noframes
@@ -27,7 +27,7 @@
   const CURSOR_ID = "human-activity-userscript-cursor";
   const LAUNCHER_ID = "human-activity-userscript-launcher";
   const BOOT_PROBE_ID = "human-activity-boot-probe";
-  const VERSION = "1.2.1";
+  const VERSION = "1.3.0";
 
   if (isPdfContext()) {
     return;
@@ -48,11 +48,11 @@
     REFRESHING: "REFRESHING",
   };
 
-  const ACTION_WEIGHTS = Object.freeze({
-    scroll: 0.55,
-    move: 0.25,
-    click: 0.15,
-    refresh: 0.05,
+  const ACTION_DEFAULT_WEIGHTS = Object.freeze({
+    scroll: 55,
+    move: 25,
+    click: 15,
+    refresh: 5,
   });
 
   const ACTION_LABELS = Object.freeze({
@@ -77,6 +77,7 @@
   let minDelaySeconds = 5;
   let maxDelaySeconds = 30;
   let enabledActions = createDefaultActionState();
+  let actionWeights = createDefaultActionWeights();
   let actionVariancePercent = 20;
   let panelCollapsed = false;
   let panelExpandedPosition = null;
@@ -169,6 +170,12 @@
     click: panel.querySelector("#hae-action-click"),
     refresh: panel.querySelector("#hae-action-refresh"),
   };
+  const actionWeightInputs = {
+    scroll: panel.querySelector("#hae-action-scroll-weight"),
+    move: panel.querySelector("#hae-action-move-weight"),
+    click: panel.querySelector("#hae-action-click-weight"),
+    refresh: panel.querySelector("#hae-action-refresh-weight"),
+  };
   const noteValue = panel.querySelector("#hae-note");
   const versionValue = panel.querySelector("#hae-version");
   const statusValue = panel.querySelector("#hae-status");
@@ -190,6 +197,9 @@
   actionVarianceSlider.addEventListener("input", () => void handleActionVarianceChange());
   Object.entries(actionToggleInputs).forEach(([actionName, input]) => {
     input.addEventListener("change", () => void handleActionToggle(actionName));
+  });
+  Object.entries(actionWeightInputs).forEach(([actionName, input]) => {
+    input.addEventListener("change", () => void handleActionWeightChange(actionName));
   });
   startButton.addEventListener("click", () => void handleStartClick());
   pauseButton.addEventListener("click", () => void pauseSession());
@@ -420,10 +430,10 @@
     varianceStack.appendChild(sliderRow("Var.", "hae-action-variance", "range", "0", "100", "20", "hae-action-variance-value", "20%"));
 
     const actionGrid = node("div", { className: "hae-action-grid" });
-    actionGrid.appendChild(actionToggle("hae-action-scroll", "Scroll", "55%"));
-    actionGrid.appendChild(actionToggle("hae-action-move", "Mouse", "25%"));
-    actionGrid.appendChild(actionToggle("hae-action-click", "Click", "15%"));
-    actionGrid.appendChild(actionToggle("hae-action-refresh", "Refresh", "5%"));
+    actionGrid.appendChild(actionToggle("scroll", "Scroll", 55));
+    actionGrid.appendChild(actionToggle("move", "Mouse", 25));
+    actionGrid.appendChild(actionToggle("click", "Click", 15));
+    actionGrid.appendChild(actionToggle("refresh", "Refresh", 5));
 
     const statusGrid = node("div", { className: "hae-status-grid" });
     statusGrid.appendChild(statusRow([
@@ -453,6 +463,10 @@
     body.appendChild(varianceStack);
     body.appendChild(node("label", { className: "hae-label", text: "Actions" }));
     body.appendChild(actionGrid);
+    body.appendChild(node("div", {
+      className: "hae-actions-hint",
+      text: "Active action weights are normalized automatically.",
+    }));
     body.appendChild(statusGrid);
 
     target.appendChild(header);
@@ -467,12 +481,36 @@
     return row;
   }
 
-  function actionToggle(inputId, name, weight) {
-    const label = node("label", { className: "hae-action-toggle", htmlFor: inputId });
-    label.appendChild(node("input", { id: inputId, type: "checkbox", checked: true }));
-    label.appendChild(node("span", { className: "hae-action-name", text: name }));
-    label.appendChild(node("span", { className: "hae-action-weight", text: weight }));
-    return label;
+  function actionToggle(actionName, name, weight) {
+    const inputId = `hae-action-${actionName}`;
+    const weightId = `${inputId}-weight`;
+    const card = node("div", { className: "hae-action-toggle" });
+    card.appendChild(node("input", {
+      id: inputId,
+      type: "checkbox",
+      checked: true,
+      title: `Enable or disable ${name.toLowerCase()}`,
+    }));
+    card.appendChild(node("label", {
+      className: "hae-action-name",
+      htmlFor: inputId,
+      text: name,
+    }));
+    const weightWrap = node("div", { className: "hae-action-weight-wrap" });
+    weightWrap.appendChild(node("input", {
+      id: weightId,
+      type: "number",
+      min: "0",
+      max: "100",
+      step: "1",
+      inputMode: "numeric",
+      pattern: "[0-9]*",
+      value: String(weight),
+      title: `${name} weight (0-100)`,
+    }));
+    weightWrap.appendChild(node("span", { className: "hae-action-weight-suffix", text: "%" }));
+    card.appendChild(weightWrap);
+    return card;
   }
 
   function statusRow(children) {
@@ -495,10 +533,12 @@
     if (options.pattern) element.setAttribute("pattern", options.pattern);
     if (options.autocomplete) element.setAttribute("autocomplete", options.autocomplete);
     if (options.spellcheck) element.setAttribute("spellcheck", options.spellcheck);
+    if (options.step != null) element.setAttribute("step", String(options.step));
     if (options.min != null) element.setAttribute("min", String(options.min));
     if (options.max != null) element.setAttribute("max", String(options.max));
     if (options.value != null) element.setAttribute("value", String(options.value));
     if (options.checked != null) element.checked = Boolean(options.checked);
+    if (options.disabled != null) element.disabled = Boolean(options.disabled);
 
     return element;
   }
@@ -862,12 +902,12 @@
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
-        margin-bottom: 14px;
+        margin-bottom: 8px;
       }
 
       #${PANEL_ID} .hae-action-toggle {
         display: grid;
-        grid-template-columns: auto 1fr auto;
+        grid-template-columns: auto minmax(0, 1fr) auto;
         align-items: center;
         gap: 8px;
         min-width: 0;
@@ -891,10 +931,57 @@
         white-space: nowrap;
       }
 
-      #${PANEL_ID} .hae-action-weight {
+      #${PANEL_ID} .hae-action-weight-wrap {
+        display: inline-flex;
+        align-items: center;
+        justify-self: end;
+        gap: 4px;
+      }
+
+      #${PANEL_ID} .hae-action-weight-wrap input[type="number"] {
+        width: 48px;
+        min-width: 48px;
+        box-sizing: border-box;
+        min-height: 28px;
+        padding: 5px 6px;
+        border-radius: 8px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        background: #ffffff;
+        color: #0f172a;
+        text-align: center;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.1;
+        font-variant-numeric: tabular-nums;
+        caret-color: #0f766e;
+      }
+
+      #${PANEL_ID} .hae-action-weight-wrap input[type="number"]:disabled {
+        background: #f8fafc;
+        color: #94a3b8;
+      }
+
+      #${PANEL_ID} .hae-action-weight-wrap input[type="number"]::-webkit-outer-spin-button,
+      #${PANEL_ID} .hae-action-weight-wrap input[type="number"]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+
+      #${PANEL_ID} .hae-action-weight-wrap input[type="number"] {
+        -moz-appearance: textfield;
+      }
+
+      #${PANEL_ID} .hae-action-weight-suffix {
         color: #0f766e;
         font-size: 11px;
         font-weight: 700;
+      }
+
+      #${PANEL_ID} .hae-actions-hint {
+        margin-bottom: 14px;
+        color: #64748b;
+        font-size: 10px;
+        line-height: 1.25;
       }
 
       #${PANEL_ID} .hae-status-grid {
@@ -997,6 +1084,7 @@
       minDelaySeconds,
       maxDelaySeconds,
       actionVariancePercent,
+      actionWeights: { ...actionWeights },
       panelCollapsed,
       panelExpandedPosition,
       panelCollapsedPosition,
@@ -1014,6 +1102,7 @@
     minDelaySeconds = clamp(Number(session.minDelaySeconds ?? minDelaySeconds), 1, 60);
     maxDelaySeconds = clamp(Number(session.maxDelaySeconds ?? maxDelaySeconds), 1, 180);
     actionVariancePercent = clamp(Number(session.actionVariancePercent ?? actionVariancePercent), 0, 100);
+    actionWeights = normalizeActionWeights(session.actionWeights);
     panelCollapsed = false;
     actionCount = Number(session.actionCount ?? 0);
     nextActionAt = Number(session.nextActionAt ?? 0);
@@ -1097,6 +1186,30 @@
       click: true,
       refresh: true,
     };
+  }
+
+  function createDefaultActionWeights() {
+    return {
+      scroll: ACTION_DEFAULT_WEIGHTS.scroll,
+      move: ACTION_DEFAULT_WEIGHTS.move,
+      click: ACTION_DEFAULT_WEIGHTS.click,
+      refresh: ACTION_DEFAULT_WEIGHTS.refresh,
+    };
+  }
+
+  function normalizeActionWeights(candidate) {
+    const normalized = createDefaultActionWeights();
+
+    for (const actionName of Object.keys(normalized)) {
+      if (candidate && Object.prototype.hasOwnProperty.call(candidate, actionName)) {
+        const nextValue = Number(candidate[actionName]);
+        if (Number.isFinite(nextValue)) {
+          normalized[actionName] = clamp(Math.round(nextValue), 0, 100);
+        }
+      }
+    }
+
+    return normalized;
   }
 
   function normalizeEnabledActions(candidate) {
@@ -1282,13 +1395,20 @@
   }
 
   function pickAction() {
-    const baseWeights = Object.entries(ACTION_WEIGHTS).filter(([actionName]) => enabledActions[actionName]);
-    if (baseWeights.length === 0) {
+    const activeWeights = Object.entries(actionWeights)
+      .filter(([actionName]) => enabledActions[actionName])
+      .map(([actionName, weight]) => [actionName, Math.max(0, Number(weight) || 0)]);
+
+    if (activeWeights.length === 0) {
       return "scroll";
     }
 
+    const positiveWeights = activeWeights.some(([, weight]) => weight > 0)
+      ? activeWeights.filter(([, weight]) => weight > 0)
+      : activeWeights.map(([actionName]) => [actionName, 1]);
+
     const varianceFactor = actionVariancePercent / 100;
-    const adjustedEntries = baseWeights.map(([name, weight]) => {
+    const adjustedEntries = positiveWeights.map(([name, weight]) => {
       const variance = (Math.random() * 2 - 1) * varianceFactor;
       return [name, Math.max(0.01, weight * (1 + variance))];
     });
@@ -1373,14 +1493,44 @@
 
   async function handleActionToggle(actionName) {
     enabledActions[actionName] = Boolean(actionToggleInputs[actionName]?.checked);
+    if (actionWeightInputs[actionName]) {
+      actionWeightInputs[actionName].disabled = !enabledActions[actionName];
+    }
 
     if (!Object.values(enabledActions).some(Boolean)) {
       enabledActions[actionName] = true;
       actionToggleInputs[actionName].checked = true;
+      if (actionWeightInputs[actionName]) {
+        actionWeightInputs[actionName].disabled = false;
+      }
       noteText = "At least one action must stay enabled.";
     }
 
-    if (nextActionName !== "-" && !enabledActions[nextActionName]) {
+    if (nextActionName !== "-" && statusMode === STATUS.RUNNING) {
+      nextActionName = pickAction();
+      nextActionValue.textContent = formatActionName(nextActionName);
+    }
+
+    updateUiState();
+    await persistSession();
+  }
+
+  async function handleActionWeightChange(actionName) {
+    const input = actionWeightInputs[actionName];
+    if (!input) {
+      return;
+    }
+
+    const parsedValue = Number(input.value);
+    if (!Number.isFinite(parsedValue)) {
+      input.value = String(actionWeights[actionName]);
+      return;
+    }
+
+    actionWeights[actionName] = clamp(Math.round(parsedValue), 0, 100);
+    input.value = String(actionWeights[actionName]);
+
+    if (nextActionName !== "-" && statusMode === STATUS.RUNNING) {
       nextActionName = pickAction();
       nextActionValue.textContent = formatActionName(nextActionName);
     }
@@ -1647,7 +1797,17 @@
   function syncActionToggles() {
     for (const [actionName, input] of Object.entries(actionToggleInputs)) {
       input.checked = enabledActions[actionName];
-      input.title = `${ACTION_LABELS[actionName]} (${formatPercent(Math.round(ACTION_WEIGHTS[actionName] * 100))})`;
+      input.title = `Enable or disable ${ACTION_LABELS[actionName]}`;
+    }
+
+    for (const [actionName, input] of Object.entries(actionWeightInputs)) {
+      if (!input) {
+        continue;
+      }
+
+      input.value = String(actionWeights[actionName]);
+      input.disabled = !enabledActions[actionName];
+      input.title = `${ACTION_LABELS[actionName]} weight (0-100). Active actions are normalized automatically.`;
     }
   }
 

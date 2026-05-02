@@ -8,6 +8,7 @@ It runs locally in your browser and is meant to behave like a lightweight compan
 
 - Keeps a floating controller on supported AVA pages.
 - Provides start, pause, stop, and hide controls, plus a draggable `HA` launcher square.
+- Lets you edit the action mix with per-action percentage fields for scroll, mouse move, click, and refresh.
 - Persists session state locally so a refresh can restore where you were.
 - Lets you move the launcher square and reopen the panel from it.
 
@@ -27,6 +28,8 @@ If you already have an older local copy installed, remove that old copy first so
 Installing from the raw GitHub URL keeps Tampermonkey wired to the repository's `@updateURL`, so updates come from GitHub automatically.
 
 If you hide the controller with `x`, the draggable `HA` launcher stays on the page so you can bring it back later.
+
+The action percentages are editable as `0` to `100` values. The controller normalizes the active weights automatically when it chooses the next action, so the mix keeps working even if the values do not add up to exactly `100`.
 
 ## License
 
