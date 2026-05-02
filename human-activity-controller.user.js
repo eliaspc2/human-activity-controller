@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Human Activity Controller
 // @namespace    https://github.com/eliaspc2/human-activity-controller
-// @version      1.3.0
+// @version      1.3.2
 // @homepageURL  https://github.com/eliaspc2/human-activity-controller
 // @downloadURL  https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
 // @updateURL    https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
@@ -27,7 +27,7 @@
   const CURSOR_ID = "human-activity-userscript-cursor";
   const LAUNCHER_ID = "human-activity-userscript-launcher";
   const BOOT_PROBE_ID = "human-activity-boot-probe";
-  const VERSION = "1.3.0";
+  const VERSION = "1.3.2";
 
   if (isPdfContext()) {
     return;
@@ -164,6 +164,7 @@
   const minDelayValue = panel.querySelector("#hae-min-delay-value");
   const maxDelayValue = panel.querySelector("#hae-max-delay-value");
   const actionVarianceValue = panel.querySelector("#hae-action-variance-value");
+  const resetWeightsButton = panel.querySelector("#hae-reset-weights");
   const actionToggleInputs = {
     scroll: panel.querySelector("#hae-action-scroll"),
     move: panel.querySelector("#hae-action-move"),
@@ -201,6 +202,7 @@
   Object.entries(actionWeightInputs).forEach(([actionName, input]) => {
     input.addEventListener("change", () => void handleActionWeightChange(actionName));
   });
+  resetWeightsButton.addEventListener("click", () => void resetActionWeights());
   startButton.addEventListener("click", () => void handleStartClick());
   pauseButton.addEventListener("click", () => void pauseSession());
   stopButton.addEventListener("click", () => void stopSession(STATUS.STOPPED));
@@ -465,8 +467,17 @@
     body.appendChild(actionGrid);
     body.appendChild(node("div", {
       className: "hae-actions-hint",
-      text: "Active action weights are normalized automatically.",
+      text: "Active weights are normalized automatically.",
     }));
+    const actionsResetRow = node("div", { className: "hae-actions-reset-row" });
+    actionsResetRow.appendChild(node("button", {
+      className: "hae-chip hae-actions-reset-button",
+      id: "hae-reset-weights",
+      type: "button",
+      text: "Reset",
+      title: "Restore the default action weights",
+    }));
+    body.appendChild(actionsResetRow);
     body.appendChild(statusGrid);
 
     target.appendChild(header);
@@ -502,13 +513,12 @@
       type: "number",
       min: "0",
       max: "100",
-      step: "1",
+      step: "5",
       inputMode: "numeric",
       pattern: "[0-9]*",
       value: String(weight),
-      title: `${name} weight (0-100)`,
+      title: `${name} weight (0-100, step 5)`,
     }));
-    weightWrap.appendChild(node("span", { className: "hae-action-weight-suffix", text: "%" }));
     card.appendChild(weightWrap);
     return card;
   }
@@ -939,8 +949,8 @@
       }
 
       #${PANEL_ID} .hae-action-weight-wrap input[type="number"] {
-        width: 48px;
-        min-width: 48px;
+        width: 56px;
+        min-width: 56px;
         box-sizing: border-box;
         min-height: 28px;
         padding: 5px 6px;
@@ -961,27 +971,21 @@
         color: #94a3b8;
       }
 
-      #${PANEL_ID} .hae-action-weight-wrap input[type="number"]::-webkit-outer-spin-button,
-      #${PANEL_ID} .hae-action-weight-wrap input[type="number"]::-webkit-inner-spin-button {
-        -webkit-appearance: none;
-        margin: 0;
-      }
-
-      #${PANEL_ID} .hae-action-weight-wrap input[type="number"] {
-        -moz-appearance: textfield;
-      }
-
-      #${PANEL_ID} .hae-action-weight-suffix {
-        color: #0f766e;
-        font-size: 11px;
-        font-weight: 700;
-      }
-
       #${PANEL_ID} .hae-actions-hint {
         margin-bottom: 14px;
         color: #64748b;
         font-size: 10px;
         line-height: 1.25;
+      }
+
+      #${PANEL_ID} .hae-actions-reset-row {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 14px;
+      }
+
+      #${PANEL_ID} .hae-actions-reset-button {
+        min-width: 68px;
       }
 
       #${PANEL_ID} .hae-status-grid {
@@ -1427,6 +1431,13 @@
     return adjustedEntries[adjustedEntries.length - 1][0];
   }
 
+  function refreshNextActionPreview() {
+    if (nextActionName !== "-" && statusMode === STATUS.RUNNING) {
+      nextActionName = pickAction();
+      nextActionValue.textContent = formatActionName(nextActionName);
+    }
+  }
+
   function handleMinutesTyping() {
     const digitsOnly = minutesInput.value.replace(/[^\d]/g, "");
     minutesInput.value = digitsOnly;
@@ -1506,11 +1517,7 @@
       noteText = "At least one action must stay enabled.";
     }
 
-    if (nextActionName !== "-" && statusMode === STATUS.RUNNING) {
-      nextActionName = pickAction();
-      nextActionValue.textContent = formatActionName(nextActionName);
-    }
-
+    refreshNextActionPreview();
     updateUiState();
     await persistSession();
   }
@@ -1530,11 +1537,14 @@
     actionWeights[actionName] = clamp(Math.round(parsedValue), 0, 100);
     input.value = String(actionWeights[actionName]);
 
-    if (nextActionName !== "-" && statusMode === STATUS.RUNNING) {
-      nextActionName = pickAction();
-      nextActionValue.textContent = formatActionName(nextActionName);
-    }
+    refreshNextActionPreview();
+    updateUiState();
+    await persistSession();
+  }
 
+  async function resetActionWeights() {
+    actionWeights = createDefaultActionWeights();
+    refreshNextActionPreview();
     updateUiState();
     await persistSession();
   }
@@ -1807,7 +1817,7 @@
 
       input.value = String(actionWeights[actionName]);
       input.disabled = !enabledActions[actionName];
-      input.title = `${ACTION_LABELS[actionName]} weight (0-100). Active actions are normalized automatically.`;
+      input.title = `${ACTION_LABELS[actionName]} weight (0-100, step 5). Active weights are normalized automatically.`;
     }
   }
 
