@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Human Activity Controller
 // @namespace    https://github.com/eliaspc2/human-activity-controller
-// @version      1.3.2
+// @version      1.3.3
 // @homepageURL  https://github.com/eliaspc2/human-activity-controller
 // @downloadURL  https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
 // @updateURL    https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
@@ -27,7 +27,7 @@
   const CURSOR_ID = "human-activity-userscript-cursor";
   const LAUNCHER_ID = "human-activity-userscript-launcher";
   const BOOT_PROBE_ID = "human-activity-boot-probe";
-  const VERSION = "1.3.2";
+  const VERSION = "1.3.3";
 
   if (isPdfContext()) {
     return;
@@ -465,19 +465,20 @@
     body.appendChild(varianceStack);
     body.appendChild(node("label", { className: "hae-label", text: "Actions" }));
     body.appendChild(actionGrid);
-    body.appendChild(node("div", {
+    const actionsFooter = node("div", { className: "hae-actions-footer" });
+    actionsFooter.appendChild(node("span", {
       className: "hae-actions-hint",
       text: "Active weights are normalized automatically.",
     }));
-    const actionsResetRow = node("div", { className: "hae-actions-reset-row" });
-    actionsResetRow.appendChild(node("button", {
-      className: "hae-chip hae-actions-reset-button",
+    actionsFooter.appendChild(node("button", {
+      className: "hae-actions-reset-button",
       id: "hae-reset-weights",
       type: "button",
-      text: "Reset",
-      title: "Restore the default action weights",
+      ariaLabel: "Reset action weights",
+      title: "Reset action weights to the default mix",
     }));
-    body.appendChild(actionsResetRow);
+    actionsFooter.lastChild.appendChild(node("span", { className: "hae-actions-reset-icon", text: "↺" }));
+    body.appendChild(actionsFooter);
     body.appendChild(statusGrid);
 
     target.appendChild(header);
@@ -972,20 +973,53 @@
       }
 
       #${PANEL_ID} .hae-actions-hint {
-        margin-bottom: 14px;
+        margin: 0;
+        padding-top: 2px;
+        flex: 1 1 auto;
         color: #64748b;
         font-size: 10px;
         line-height: 1.25;
       }
 
-      #${PANEL_ID} .hae-actions-reset-row {
+      #${PANEL_ID} .hae-actions-footer {
         display: flex;
-        justify-content: flex-end;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
         margin-bottom: 14px;
       }
 
       #${PANEL_ID} .hae-actions-reset-button {
-        min-width: 68px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border-radius: 999px;
+        border: 1px solid rgba(239, 68, 68, 0.24);
+        background: rgba(254, 242, 242, 0.98);
+        color: #b91c1c;
+        box-shadow: 0 8px 18px rgba(239, 68, 68, 0.12);
+        flex: 0 0 auto;
+      }
+
+      #${PANEL_ID} .hae-actions-reset-button:hover {
+        background: rgba(254, 226, 226, 0.98);
+        border-color: rgba(239, 68, 68, 0.34);
+        color: #991b1b;
+      }
+
+      #${PANEL_ID} .hae-actions-reset-button:active {
+        transform: translateY(1px);
+      }
+
+      #${PANEL_ID} .hae-actions-reset-icon {
+        display: block;
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1;
+        transform: translateY(-1px);
       }
 
       #${PANEL_ID} .hae-status-grid {
