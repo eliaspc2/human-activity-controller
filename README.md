@@ -8,6 +8,7 @@ It runs locally in your browser and is meant to behave like a lightweight compan
 
 - Keeps a floating controller on supported AVA pages.
 - Provides start, pause, stop, and hide controls, plus a draggable `HA` launcher square.
+- Starts hidden by default behind the `HA` launcher.
 - Lets you edit the action mix with per-action numeric weight fields for scroll, mouse move, click, and refresh.
 - Provides a reset button to restore the default action weights at any time.
 - Persists session state locally so a refresh can restore where you were.

@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         Human Activity Controller
 // @namespace    https://github.com/eliaspc2/human-activity-controller
-// @version      1.3.3
+// @version      1.3.4
 // @homepageURL  https://github.com/eliaspc2/human-activity-controller
 // @downloadURL  https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
 // @updateURL    https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
 // @license      MIT
-// @description  Floating controller with a draggable HA launcher for simulated reading-like activity with editable weighted scroll, cursor movement, clicks, and refresh.
+// @description  Floating controller that starts hidden behind a draggable HA launcher for simulated reading-like activity with editable weighted scroll, cursor movement, clicks, and refresh.
 // @match        https://ava.tecnisign.pt/*
 // @match        https://ava.multiformactiva.pt/*
 // @noframes
@@ -27,7 +27,7 @@
   const CURSOR_ID = "human-activity-userscript-cursor";
   const LAUNCHER_ID = "human-activity-userscript-launcher";
   const BOOT_PROBE_ID = "human-activity-boot-probe";
-  const VERSION = "1.3.3";
+  const VERSION = "1.3.4";
 
   if (isPdfContext()) {
     return;
@@ -66,7 +66,7 @@
   const TAB_MARKER = "__hae_tab_id__=";
   const SESSION_KEY = `${STORE_PREFIX}session:${ensureTabId()}`;
 
-  let panelOpen = true;
+  let panelOpen = false;
   let statusMode = STATUS.IDLE;
   let sessionTotalMs = 60 * 60 * 1000;
   let accumulatedElapsedMs = 0;
@@ -145,6 +145,7 @@
   root.appendChild(launcher);
   root.appendChild(panel);
   mountRoot();
+  panel.style.display = "none";
   removeBootProbe();
   console.info(`[HumanActivity] controller mounted v${VERSION}`, location.href);
 
@@ -263,11 +264,8 @@
       await persistSession();
     }
 
-    if (panelOpen) {
-      focusPanel();
-    } else {
-      panel.style.display = "none";
-    }
+    panelOpen = false;
+    panel.style.display = "none";
 
     updateUiState();
 
