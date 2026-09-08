@@ -33,6 +33,29 @@ If you hide the controller with `x`, the draggable `HA` launcher stays on the pa
 
 The action weights are editable as `0` to `100` values with `5`-step arrows. The controller normalizes the active weights automatically when it chooses the next action, so the mix keeps working even if the values do not add up to exactly `100`. Use the `Reset` button if you want to return to the default mix.
 
+## Development and validation
+
+The installable userscript remains a standalone file with no runtime dependencies.
+With Node.js 18 or newer, run:
+
+```sh
+node --check human-activity-controller.user.js
+npm test
+git diff --check
+```
+
+The regression suite executes the complete userscript in a simulated browser with controlled timers.
+For browser validation, check hidden startup, opening/closing the launcher, start/pause/stop,
+and refresh restoration on an isolated test page before using the supported sites.
+
+### 1.3.5
+
+- Cancel pending scroll steps on pause, stop, and teardown.
+- Release late wake-lock requests and clean up listeners when replacing the controller.
+- Validate saved session values and avoid identical storage writes.
+- Skip hidden statistics rendering and redundant visible text updates.
+- Add accessible names to interval and weight inputs.
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).

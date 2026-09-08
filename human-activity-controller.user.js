@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Human Activity Controller
 // @namespace    https://github.com/eliaspc2/human-activity-controller
-// @version      1.3.4
+// @version      1.3.5
 // @homepageURL  https://github.com/eliaspc2/human-activity-controller
 // @downloadURL  https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
 // @updateURL    https://raw.githubusercontent.com/eliaspc2/human-activity-controller/main/human-activity-controller.user.js
@@ -27,7 +27,7 @@
   const CURSOR_ID = "human-activity-userscript-cursor";
   const LAUNCHER_ID = "human-activity-userscript-launcher";
   const BOOT_PROBE_ID = "human-activity-boot-probe";
-  const VERSION = "1.3.4";
+  const VERSION = "1.3.5";
 
   if (isPdfContext()) {
     return;
@@ -93,6 +93,9 @@
   let loopTimer = null;
   let statsTimer = null;
   let wakeLock = null;
+  let wakeLockRequest = null;
+  let lifecycleGeneration = 0;
+  const readingScrollTimers = new Set();
   let focusPulseTimer = null;
   let panelPosition = null;
   let launcherPosition = null;
@@ -112,7 +115,15 @@
       return;
     }
 
-    existingRoot.remove();
+    const savedSessionBeforeReplacement = getStorageValue(SESSION_KEY, null);
+    if (typeof window.__humanActivityUserscript?.destroy === "function") {
+      await window.__humanActivityUserscript.destroy({ clearSession: false });
+    } else {
+      existingRoot.remove();
+    }
+    if (savedSessionBeforeReplacement) {
+      setStorageValue(SESSION_KEY, savedSessionBeforeReplacement);
+    }
     delete window.__humanActivityUserscript;
   }
 
@@ -244,7 +255,12 @@
   };
 
   async function initialize() {
+    const initializationGeneration = lifecycleGeneration;
     const savedSession = await loadSavedSession();
+
+    if (initializationGeneration !== lifecycleGeneration) {
+      return;
+    }
 
     const initialPanelPosition =
       savedSession?.panelExpandedPosition ?? savedSession?.panelPosition ?? null;
@@ -262,6 +278,10 @@
       hydrateSession(savedSession);
     } else {
       await persistSession();
+    }
+
+    if (initializationGeneration !== lifecycleGeneration) {
+      return;
     }
 
     panelOpen = false;
@@ -486,7 +506,12 @@
   function sliderRow(labelText, inputId, inputType, min, max, value, valueId, valueText) {
     const row = node("div", { className: "hae-slider-row" });
     row.appendChild(node("span", { className: "hae-slider-label", text: labelText }));
-    row.appendChild(node("input", { id: inputId, type: inputType, min, max, value }));
+    const accessibleLabels = {
+      "hae-min-delay": "Minimum interval in seconds",
+      "hae-max-delay": "Maximum interval in seconds",
+      "hae-action-variance": "Action variance in percent",
+    };
+    row.appendChild(node("input", { id: inputId, type: inputType, min, max, value, ariaLabel: accessibleLabels[inputId] || labelText }));
     row.appendChild(node("span", { className: "hae-slider-value", id: valueId, text: valueText }));
     return row;
   }
@@ -517,6 +542,7 @@
       pattern: "[0-9]*",
       value: String(weight),
       title: `${name} weight (0-100, step 5)`,
+      ariaLabel: `${name} weight`,
     }));
     card.appendChild(weightWrap);
     return card;
@@ -1073,7 +1099,12 @@
   function getStorageValue(key, fallback = null) {
     try {
       const raw = localStorage.getItem(key);
-      return raw == null ? fallback : JSON.parse(raw);
+      if (raw == null) {
+        return fallback;
+      }
+
+      const value = JSON.parse(raw);
+      return value == null ? fallback : value;
     } catch {
       return fallback;
     }
@@ -1081,7 +1112,10 @@
 
   function setStorageValue(key, value) {
     try {
-      localStorage.setItem(key, JSON.stringify(value));
+      const serializedValue = JSON.stringify(value);
+      if (serializedValue != null && localStorage.getItem(key) !== serializedValue) {
+        localStorage.setItem(key, serializedValue);
+      }
     } catch {}
   }
 
@@ -1092,7 +1126,8 @@
   }
 
   async function loadSavedSession() {
-    return getStorageValue(SESSION_KEY, null);
+    const session = getStorageValue(SESSION_KEY, null);
+    return isPlainObject(session) ? session : null;
   }
 
   function persistSessionSync() {
@@ -1134,31 +1169,30 @@
   function hydrateSession(session) {
     const now = Date.now();
 
-    panelOpen = session.panelOpen !== false;
-    minDelaySeconds = clamp(Number(session.minDelaySeconds ?? minDelaySeconds), 1, 60);
-    maxDelaySeconds = clamp(Number(session.maxDelaySeconds ?? maxDelaySeconds), 1, 180);
-    actionVariancePercent = clamp(Number(session.actionVariancePercent ?? actionVariancePercent), 0, 100);
+    panelOpen = session.panelOpen === true;
+    minDelaySeconds = normalizeBoundedInteger(session.minDelaySeconds, minDelaySeconds, 1, 60);
+    maxDelaySeconds = normalizeBoundedInteger(session.maxDelaySeconds, maxDelaySeconds, 10, 180);
+    maxDelaySeconds = Math.max(minDelaySeconds, maxDelaySeconds);
+    actionVariancePercent = normalizeBoundedInteger(session.actionVariancePercent, actionVariancePercent, 0, 100);
     actionWeights = normalizeActionWeights(session.actionWeights);
     panelCollapsed = false;
-    actionCount = Number(session.actionCount ?? 0);
-    nextActionAt = Number(session.nextActionAt ?? 0);
-    nextActionName = session.nextActionName ?? "-";
+    actionCount = normalizeBoundedInteger(session.actionCount, 0, 0, Number.MAX_SAFE_INTEGER);
+    nextActionAt = normalizeBoundedInteger(session.nextActionAt, 0, 0, Number.MAX_SAFE_INTEGER);
+    nextActionName = normalizeActionName(session.nextActionName);
     enabledActions = normalizeEnabledActions(session.enabledActions);
-    const legacyPanelPosition = session.panelPosition ?? null;
-    panelExpandedPosition = session.panelExpandedPosition ?? legacyPanelPosition;
-    panelCollapsedPosition = session.panelCollapsedPosition ?? legacyPanelPosition;
+    const legacyPanelPosition = normalizePosition(session.panelPosition);
+    panelExpandedPosition = normalizePosition(session.panelExpandedPosition) ?? legacyPanelPosition;
+    panelCollapsedPosition = normalizePosition(session.panelCollapsedPosition) ?? legacyPanelPosition;
     panelPosition = panelCollapsed ? panelCollapsedPosition : panelExpandedPosition;
-    launcherPosition = session.launcherPosition ?? null;
+    launcherPosition = normalizePosition(session.launcherPosition);
 
-    if (session.minutesValue) {
-      minutesInput.value = String(session.minutesValue);
-    }
+    const savedMinutes = normalizeDurationMinutes(session.minutesValue, null);
 
-    if (session.statusMode) {
+    if (isStatusMode(session.statusMode)) {
       statusMode = session.statusMode;
-      sessionTotalMs = Number(session.sessionTotalMs ?? sessionTotalMs);
-      accumulatedElapsedMs = Number(session.accumulatedElapsedMs ?? 0);
-      currentRunStartedAt = Number(session.currentRunStartedAt ?? 0);
+      sessionTotalMs = normalizeBoundedInteger(session.sessionTotalMs, sessionTotalMs, 60 * 1000, Number.MAX_SAFE_INTEGER);
+      accumulatedElapsedMs = normalizeBoundedInteger(session.accumulatedElapsedMs, 0, 0, Number.MAX_SAFE_INTEGER);
+      currentRunStartedAt = normalizeBoundedInteger(session.currentRunStartedAt, 0, 0, now);
 
       if (statusMode === STATUS.REFRESHING) {
         statusMode = STATUS.RUNNING;
@@ -1168,6 +1202,8 @@
       accumulatedElapsedMs = 0;
       currentRunStartedAt = 0;
     }
+
+    minutesInput.value = String(savedMinutes ?? Math.max(1, Math.round(sessionTotalMs / 60000)));
 
     minDelaySlider.value = String(minDelaySeconds);
     maxDelaySlider.value = String(maxDelaySeconds);
@@ -1196,6 +1232,63 @@
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
+  }
+
+  function isPlainObject(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function normalizeBoundedInteger(value, fallback, min, max) {
+    if (value == null || value === "" || (typeof value !== "number" && typeof value !== "string")) {
+      return fallback;
+    }
+
+    const numberValue = Number(value);
+    if (!Number.isFinite(numberValue)) {
+      return fallback;
+    }
+
+    return clamp(Math.round(numberValue), min, max);
+  }
+
+  function normalizeDurationMinutes(value, fallback = 60) {
+    if (value == null || value === "" || (typeof value !== "number" && typeof value !== "string")) {
+      return fallback;
+    }
+
+    const numberValue = Number(value);
+    if (!Number.isFinite(numberValue) || numberValue <= 0) {
+      return fallback;
+    }
+
+    return clamp(Math.round(numberValue), 1, Math.floor(Number.MAX_SAFE_INTEGER / 60000));
+  }
+
+  function normalizeActionWeight(value, fallback) {
+    if (value == null || value === "" || (typeof value !== "number" && typeof value !== "string")) {
+      return fallback;
+    }
+
+    const numberValue = Number(value);
+    if (!Number.isFinite(numberValue)) {
+      return fallback;
+    }
+
+    return clamp(Math.round(numberValue), 0, 100);
+  }
+
+  function normalizeActionName(value) {
+    return value === "-" || (typeof value === "string" && Object.prototype.hasOwnProperty.call(ACTION_LABELS, value))
+      ? value
+      : "-";
+  }
+
+  function normalizePosition(value) {
+    return isPlainObject(value) ? value : null;
+  }
+
+  function isStatusMode(value) {
+    return Object.values(STATUS).includes(value);
   }
 
   function ensureTabId() {
@@ -1238,10 +1331,7 @@
 
     for (const actionName of Object.keys(normalized)) {
       if (candidate && Object.prototype.hasOwnProperty.call(candidate, actionName)) {
-        const nextValue = Number(candidate[actionName]);
-        if (Number.isFinite(nextValue)) {
-          normalized[actionName] = clamp(Math.round(nextValue), 0, 100);
-        }
+        normalized[actionName] = normalizeActionWeight(candidate[actionName], normalized[actionName]);
       }
     }
 
@@ -1253,7 +1343,7 @@
 
     for (const actionName of Object.keys(normalized)) {
       if (candidate && Object.prototype.hasOwnProperty.call(candidate, actionName)) {
-        normalized[actionName] = Boolean(candidate[actionName]);
+        normalized[actionName] = typeof candidate[actionName] === "boolean" ? candidate[actionName] : normalized[actionName];
       }
     }
 
@@ -1269,34 +1359,73 @@
   }
 
   async function requestWakeLock() {
-    if (statusMode !== STATUS.RUNNING || !("wakeLock" in navigator) || document.visibilityState !== "visible") {
+    if (
+      wakeLock ||
+      wakeLockRequest ||
+      statusMode !== STATUS.RUNNING ||
+      !("wakeLock" in navigator) ||
+      document.visibilityState !== "visible"
+    ) {
       return;
     }
 
+    const requestGeneration = lifecycleGeneration;
+    let request = null;
+
     try {
-      wakeLock = await navigator.wakeLock.request("screen");
-      wakeLock.addEventListener("release", () => {
+      request = navigator.wakeLock.request("screen");
+      wakeLockRequest = request;
+      const acquiredWakeLock = await request;
+      if (
+        requestGeneration !== lifecycleGeneration ||
+        statusMode !== STATUS.RUNNING ||
+        document.visibilityState !== "visible"
+      ) {
+        await acquiredWakeLock.release();
+        return;
+      }
+
+      wakeLock = acquiredWakeLock;
+      acquiredWakeLock.addEventListener("release", () => {
+        if (wakeLock !== acquiredWakeLock) {
+          return;
+        }
+
         wakeLock = null;
-        if (statusMode === STATUS.RUNNING) {
+        if (statusMode === STATUS.RUNNING && requestGeneration === lifecycleGeneration) {
           void requestWakeLock();
         }
       });
     } catch (error) {
       console.debug("Human Activity userscript could not acquire wake lock.", error);
+    } finally {
+      if (request && wakeLockRequest === request) {
+        wakeLockRequest = null;
+      }
+      if (
+        requestGeneration !== lifecycleGeneration &&
+        !wakeLock &&
+        statusMode === STATUS.RUNNING &&
+        document.visibilityState === "visible"
+      ) {
+        void requestWakeLock();
+      }
     }
   }
 
   async function releaseWakeLock() {
-    if (!wakeLock) {
+    lifecycleGeneration += 1;
+    const acquiredWakeLock = wakeLock;
+    wakeLock = null;
+
+    if (!acquiredWakeLock) {
       return;
     }
 
     try {
-      await wakeLock.release();
+      await acquiredWakeLock.release();
     } catch (error) {
       console.debug("Human Activity userscript wake lock release failed.", error);
-    } finally {
-      wakeLock = null;
     }
   }
 
@@ -1357,9 +1486,10 @@
     const steps = 3 + Math.floor(Math.random() * 4);
     let completed = 0;
     const direction = chooseScrollDirection();
+    const scrollGeneration = lifecycleGeneration;
 
     function step() {
-      if (completed >= steps) {
+      if (scrollGeneration !== lifecycleGeneration || statusMode !== STATUS.RUNNING || completed >= steps) {
         return;
       }
 
@@ -1369,10 +1499,21 @@
       });
 
       completed += 1;
-      window.setTimeout(step, 500 + Math.random() * 900);
+      const timer = window.setTimeout(() => {
+        readingScrollTimers.delete(timer);
+        step();
+      }, 500 + Math.random() * 900);
+      readingScrollTimers.add(timer);
     }
 
     step();
+  }
+
+  function stopReadingScroll() {
+    for (const timer of readingScrollTimers) {
+      window.clearTimeout(timer);
+    }
+    readingScrollTimers.clear();
   }
 
   function runMouseMove() {
@@ -1476,8 +1617,7 @@
   }
 
   async function handleMinutesChange() {
-    const requestedMinutes = Number.parseFloat(minutesInput.value);
-    const normalizedMinutes = Number.isFinite(requestedMinutes) && requestedMinutes > 0 ? requestedMinutes : 60;
+    const normalizedMinutes = normalizeDurationMinutes(minutesInput.value);
     minutesInput.value = String(normalizedMinutes);
 
     if (statusMode !== STATUS.RUNNING && statusMode !== STATUS.PAUSED) {
@@ -1560,13 +1700,13 @@
       return;
     }
 
-    const parsedValue = Number(input.value);
-    if (!Number.isFinite(parsedValue)) {
+    const normalizedWeight = normalizeActionWeight(input.value, null);
+    if (normalizedWeight == null) {
       input.value = String(actionWeights[actionName]);
       return;
     }
 
-    actionWeights[actionName] = clamp(Math.round(parsedValue), 0, 100);
+    actionWeights[actionName] = normalizedWeight;
     input.value = String(actionWeights[actionName]);
 
     refreshNextActionPreview();
@@ -1659,12 +1799,17 @@
     const remainingMs = getRemainingMs(now);
     const progress = sessionTotalMs > 0 ? Math.min(100, (elapsedMs / sessionTotalMs) * 100) : 0;
 
-    timeValue.textContent = formatDuration(Math.floor(elapsedMs / 1000));
-    countdownValue.textContent =
-      statusMode === STATUS.RUNNING || statusMode === STATUS.PAUSED || statusMode === STATUS.FINISHED
-        ? formatDuration(Math.ceil(remainingMs / 1000))
-        : "-";
-    progressBar.style.width = `${progress}%`;
+    if (panelOpen) {
+      const elapsedText = formatDuration(Math.floor(elapsedMs / 1000));
+      const remainingText =
+        statusMode === STATUS.RUNNING || statusMode === STATUS.PAUSED || statusMode === STATUS.FINISHED
+          ? formatDuration(Math.ceil(remainingMs / 1000))
+          : "-";
+      if (timeValue.textContent !== elapsedText) timeValue.textContent = elapsedText;
+      if (countdownValue.textContent !== remainingText) countdownValue.textContent = remainingText;
+      const progressWidth = `${progress.toFixed(2)}%`;
+      if (progressBar.style.width !== progressWidth) progressBar.style.width = progressWidth;
+    }
 
     if (statusMode === STATUS.RUNNING && remainingMs <= 0) {
       void stopSession(STATUS.FINISHED);
@@ -1761,12 +1906,13 @@
 
     stopStatsLoop();
     stopCursorAnimation();
+    stopReadingScroll();
     await releaseWakeLock();
     updateUiState();
     await persistSession();
   }
 
-  async function stopSession(nextStatus = STATUS.STOPPED) {
+  async function stopSession(nextStatus = STATUS.STOPPED, { persist = true } = {}) {
     if (statusMode === STATUS.RUNNING) {
       accumulatedElapsedMs = getElapsedMs();
     }
@@ -1779,7 +1925,7 @@
       accumulatedElapsedMs = sessionTotalMs;
     }
 
-    setStatus(nextStatus);
+    setStatus(nextStatus, { persist });
 
     if (loopTimer) {
       window.clearTimeout(loopTimer);
@@ -1788,9 +1934,12 @@
 
     stopStatsLoop();
     stopCursorAnimation();
+    stopReadingScroll();
     await releaseWakeLock();
     updateUiState();
-    await persistSession();
+    if (persist) {
+      await persistSession();
+    }
   }
 
   function setStatus(nextStatus, { persist = true } = {}) {
@@ -1959,7 +2108,7 @@
   }
 
   function handleDragStart(event) {
-    if (event.button !== 0) {
+    if (event.button !== 0 || event.target.closest("button, input, select, textarea, a")) {
       return;
     }
 
@@ -2060,6 +2209,7 @@
   function focusPanel() {
     panel.style.display = "";
     panelOpen = true;
+    updateStats();
     clampPanelToViewport();
     panel.classList.add("hae-focus");
 
@@ -2126,17 +2276,29 @@
     }
   }
 
-  async function destroy() {
+  async function destroy({ clearSession = true } = {}) {
     panelOpen = false;
-    await stopSession(STATUS.IDLE);
+    if (!clearSession) {
+      persistSessionSync();
+    }
+    await stopSession(STATUS.IDLE, { persist: clearSession });
     document.removeEventListener("mousemove", handleDragMove);
     document.removeEventListener("mouseup", handleDragEnd);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
+    window.removeEventListener("beforeunload", handlePageUnload);
+    window.removeEventListener("pagehide", handlePageUnload);
     dragbar.removeEventListener("mousedown", handleDragStart);
     launcher.removeEventListener("click", handleLauncherClick);
     launcher.removeEventListener("mousedown", handleLauncherDragStart);
-    await clearSavedSession();
+    if (focusPulseTimer) {
+      window.clearTimeout(focusPulseTimer);
+      focusPulseTimer = null;
+    }
+    if (clearSession) {
+      await clearSavedSession();
+    }
     root.remove();
+    document.getElementById(STYLE_ID)?.remove();
     delete window.__humanActivityUserscript;
   }
 

@@ -1,0 +1,7 @@
+{
+  "name": "human-activity-controller",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.cjs"
+  }
+}
